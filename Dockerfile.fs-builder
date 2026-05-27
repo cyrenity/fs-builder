@@ -73,7 +73,7 @@ RUN git clone https://github.com/freeswitch/spandsp.git /src/spandsp \
  && ldconfig
 
 # 2. Sofia-SIP — FreeSWITCH fork
-RUN git clone --depth 1 https://github.com/freeswitch/sofia-sip.git /src/sofia-sip \
+RUN git clone https://github.com/freeswitch/sofia-sip.git /src/sofia-sip \
  && cd /src/sofia-sip \
  && ./bootstrap.sh \
  && ./configure \
@@ -81,16 +81,20 @@ RUN git clone --depth 1 https://github.com/freeswitch/sofia-sip.git /src/sofia-s
  && make install \
  && ldconfig
 
-# 3. libks — installs into /usr per upstream guidance so FS configure finds it
-RUN git clone --depth 1 https://github.com/signalwire/libks.git /src/libks \
+# 3. libks — installs into /usr per upstream guidance so FS configure finds it.
+#    Full clone (no --depth 1) so `git describe --tags` works during configure.
+RUN git clone https://github.com/signalwire/libks.git /src/libks \
  && cd /src/libks \
- && cmake -B build -DCMAKE_INSTALL_PREFIX=/usr \
+ && (cmake -B build -DCMAKE_INSTALL_PREFIX=/usr \
+        || (echo "--- CMakeError.log ---"  ; cat build/CMakeFiles/CMakeError.log  2>/dev/null; \
+            echo "--- CMakeOutput.log ---" ; cat build/CMakeFiles/CMakeOutput.log 2>/dev/null; \
+            exit 1)) \
  && cmake --build build -j"$(nproc)" \
  && cmake --install build \
  && ldconfig
 
 # 4. signalwire-c
-RUN git clone --depth 1 https://github.com/signalwire/signalwire-c.git /src/signalwire-c \
+RUN git clone https://github.com/signalwire/signalwire-c.git /src/signalwire-c \
  && cd /src/signalwire-c \
  && cmake . \
  && make -j"$(nproc)" \
