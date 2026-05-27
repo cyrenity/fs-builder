@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1.7
+
+# Multi-stage, multi-arch builder image for out-of-tree FreeSWITCH modules.
+#
+# Stage 1 compiles FreeSWITCH from source against the target ABI; stage 2
+# strips the build chain and keeps only headers, libs, freeswitch.pc, and the
+# tools any sane module repo needs at build time (cmake, gcc, pkg-config,
+# common -dev libs).
+#
+# Build (multi-arch):
+#   docker buildx build \
+#     --platform linux/arm64,linux/amd64 \
+#     --build-arg FS_VERSION=v1.10.12 \
+#     -t ghcr.io/<owner>/fs-mod-builder:1.10.12-debian12 \
+#     -f Dockerfile.fs-builder --push .
+#
+# Use from a module repo's CI:
+#   jobs.build.container.image:
+#     ghcr.io/<owner>/fs-mod-builder:1.10.12-debian12
+
+ARG DEBIAN_VERSION=12
+ARG FS_VERSION=v1.10.12
+
+# ---------------------------------------------------------------------------
+# Stage 1: compile FreeSWITCH (headers, libs, pkg-config only; no modules)
+# ---------------------------------------------------------------------------
+FROM debian:${DEBIAN_VERSION}-slim AS fs-source
+
+ARG FS_VERSION
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates \
+        build-essential automake autoconf libtool pkg-config yasm \
+        libssl-dev zlib1g-dev libdb-dev unixodbc-dev libpcre3-dev \
+        libsqlite3-dev libcurl4-openssl-dev libldns-dev libedit-dev \
+        libspeex-dev libspeexdsp-dev libopus-dev libsndfile1-dev \
+        libtiff-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch ${FS_VERSION} \
+        https://github.com/signalwire/freeswitch.git /src/fs
+
+WORKDIR /src/fs
+
+# --disable-everything skips every bundled module — we only need libfreeswitch
+# and the headers so out-of-tree modules can link against the ABI.
+RUN ./bootstrap.sh -j \
+ && ./configure \
+        --prefix=/opt/freeswitch \
+        --disable-everything \
+        --disable-core-odbc-support \
+        --disable-system-xml-prefix \
+ && make -j"$(nproc)" \
+ && make install
+
+# ---------------------------------------------------------------------------
+# Stage 2: lean runtime — just enough to build out-of-tree modules
+# ---------------------------------------------------------------------------
+FROM debian:${DEBIAN_VERSION}-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PKG_CONFIG_PATH=/opt/freeswitch/lib/pkgconfig \
+    LD_LIBRARY_PATH=/opt/freeswitch/lib
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        build-essential cmake pkg-config git \
+        libssl-dev libcurl4-openssl-dev libsqlite3-dev libpcre3-dev \
+        libspeex-dev libspeexdsp-dev libopus-dev libsndfile1-dev \
+        libedit-dev libldns-dev libtiff-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Just headers, libs, and pkg-config from stage 1
+COPY --from=fs-source /opt/freeswitch /opt/freeswitch
+
+# Sanity check at build time: pkg-config can resolve `freeswitch`
+RUN pkg-config --exists freeswitch && \
+    pkg-config --modversion freeswitch
+
+LABEL org.opencontainers.image.title="fs-mod-builder" \
+      org.opencontainers.image.description="Builder image for out-of-tree FreeSWITCH modules (multi-arch: linux/amd64, linux/arm64)" \
+      org.opencontainers.image.source="https://github.com/cyrenity/fs-builder"
