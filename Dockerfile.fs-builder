@@ -83,12 +83,11 @@ RUN git clone https://github.com/freeswitch/sofia-sip.git /src/sofia-sip \
 
 # 3. libks — installs into /usr per upstream guidance so FS configure finds it.
 #    Full clone (no --depth 1) so `git describe --tags` works during configure.
+#    WITH_PACKAGING=OFF disables the Debian .deb generation block, whose
+#    install step otherwise references a `changelog.Debian.gz` we don't build.
 RUN git clone https://github.com/signalwire/libks.git /src/libks \
  && cd /src/libks \
- && (cmake -B build -DCMAKE_INSTALL_PREFIX=/usr \
-        || (echo "--- CMakeError.log ---"  ; cat build/CMakeFiles/CMakeError.log  2>/dev/null; \
-            echo "--- CMakeOutput.log ---" ; cat build/CMakeFiles/CMakeOutput.log 2>/dev/null; \
-            exit 1)) \
+ && cmake -B build -DCMAKE_INSTALL_PREFIX=/usr -DWITH_PACKAGING=OFF \
  && cmake --build build -j"$(nproc)" \
  && cmake --install build \
  && ldconfig
