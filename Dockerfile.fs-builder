@@ -47,8 +47,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Build-time deps. Notes:
 #   - libtool-bin supplies the actual `libtool` binary on Debian 12+; the
 #     libtool package alone only installs helper scripts.
-#   - Both libpcre2-dev (FS 1.11+) and libpcre3-dev (older FS) are included
-#     so this Dockerfile works across FS versions.
+#   - libpcre3-dev (PCRE1) was removed from Trixie since upstream hit EOL.
+#     We install it only when available so the same Dockerfile works on
+#     Bookworm (FS 1.10.x prefers PCRE1) and Trixie (PCRE2-only).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates wget curl git \
         build-essential autoconf automake libtool libtool-bin \
@@ -56,9 +57,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         uuid-dev libssl-dev libsqlite3-dev libcurl4-openssl-dev \
         libldns-dev libspeexdsp-dev libspeex-dev libedit-dev \
         libtiff-dev libopus-dev liblua5.2-dev libpq-dev \
-        libsndfile1-dev libpcre2-dev libpcre3-dev \
+        libsndfile1-dev libpcre2-dev \
         libavformat-dev libswscale-dev \
-    && rm -rf /var/lib/apt/lists/*
+ && if apt-cache show libpcre3-dev >/dev/null 2>&1; then \
+        apt-get install -y --no-install-recommends libpcre3-dev; \
+    fi \
+ && rm -rf /var/lib/apt/lists/*
 
 # Each prerequisite is its own RUN layer so an FS_VERSION bump doesn't
 # invalidate the (expensive) prerequisite cache.
@@ -133,11 +137,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake pkg-config git \
         autoconf automake libtool libtool-bin \
         uuid-dev libssl-dev libcurl4-openssl-dev libsqlite3-dev \
-        libpcre2-dev libpcre3-dev \
+        libpcre2-dev \
         libspeex-dev libspeexdsp-dev libopus-dev \
         libsndfile1-dev libedit-dev libldns-dev libtiff-dev \
         liblua5.2-dev libpq-dev libavformat-dev libswscale-dev \
-    && rm -rf /var/lib/apt/lists/*
+ && if apt-cache show libpcre3-dev >/dev/null 2>&1; then \
+        apt-get install -y --no-install-recommends libpcre3-dev; \
+    fi \
+ && rm -rf /var/lib/apt/lists/*
 
 # FreeSWITCH install tree (headers, libs, freeswitch.pc, helper scripts)
 COPY --from=fs-source /opt/freeswitch /opt/freeswitch
