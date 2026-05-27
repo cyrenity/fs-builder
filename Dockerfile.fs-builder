@@ -2,82 +2,137 @@
 
 # Multi-stage, multi-arch builder image for out-of-tree FreeSWITCH modules.
 #
-# Stage 1 compiles FreeSWITCH from source against the target ABI; stage 2
-# strips the build chain and keeps only headers, libs, freeswitch.pc, and the
-# tools any sane module repo needs at build time (cmake, gcc, pkg-config,
-# common -dev libs).
+# Stage 1 compiles the four source-only prerequisites (spandsp, sofia-sip,
+# libks, signalwire-c) and then FreeSWITCH itself. Stage 2 drops the build
+# chain and keeps only the installed artifacts plus the tools and -dev
+# packages module repos need at build time.
 #
 # Build (multi-arch):
 #   docker buildx build \
 #     --platform linux/arm64,linux/amd64 \
-#     --build-arg FS_VERSION=v1.10.12 \
-#     -t ghcr.io/<owner>/fs-mod-builder:1.10.12-debian12 \
+#     --build-arg FS_VERSION=v1.11.0 \
+#     --build-arg DEBIAN_RELEASE=trixie \
+#     -t ghcr.io/cyrenity/fs-mod-builder:1.11.0-trixie \
 #     -f Dockerfile.fs-builder --push .
 #
 # Use from a module repo's CI:
 #   jobs.build.container.image:
-#     ghcr.io/<owner>/fs-mod-builder:1.10.12-debian12
+#     ghcr.io/cyrenity/fs-mod-builder:1.11.0-trixie
+#
+# Dep list / source-built prereqs follow the FreeSWITCH 1.11 Debian Trixie
+# install guide at:
+#   https://www.iqaai.com/resources/freeswitch-v1-11-0-installation-guide
 
-ARG DEBIAN_VERSION=12
-ARG FS_VERSION=v1.10.12
+ARG DEBIAN_RELEASE=trixie
+ARG FS_VERSION=v1.11.0
 
 # ---------------------------------------------------------------------------
-# Stage 1: compile FreeSWITCH (headers, libs, pkg-config only; no modules)
+# Stage 1: build prerequisites + FreeSWITCH
 # ---------------------------------------------------------------------------
-FROM debian:${DEBIAN_VERSION}-slim AS fs-source
+FROM debian:${DEBIAN_RELEASE}-slim AS fs-source
 
 ARG FS_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Build-time deps. Note: libtool-bin supplies the actual `libtool` binary on
+# Debian 12+; the libtool package alone only installs helper scripts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git ca-certificates \
-        build-essential automake autoconf libtool pkg-config yasm \
-        libssl-dev zlib1g-dev libdb-dev unixodbc-dev libpcre3-dev \
-        libsqlite3-dev libcurl4-openssl-dev libldns-dev libedit-dev \
-        libspeex-dev libspeexdsp-dev libopus-dev libsndfile1-dev \
-        libtiff-dev \
+        ca-certificates wget curl git \
+        build-essential autoconf automake libtool libtool-bin \
+        pkg-config cmake yasm \
+        uuid-dev libssl-dev libsqlite3-dev libcurl4-openssl-dev \
+        libldns-dev libspeexdsp-dev libspeex-dev libedit-dev \
+        libtiff-dev libopus-dev liblua5.2-dev libpq-dev \
+        libsndfile1-dev libpcre2-dev libavformat-dev libswscale-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Each prerequisite is its own RUN layer so an FS_VERSION bump doesn't
+# invalidate the (expensive) prerequisite cache.
+
+# 1. SpanDSP — FreeSWITCH fork
+RUN git clone --depth 1 https://github.com/freeswitch/spandsp.git /src/spandsp \
+ && cd /src/spandsp \
+ && ./bootstrap.sh \
+ && ./configure \
+ && make -j"$(nproc)" \
+ && make install \
+ && ldconfig
+
+# 2. Sofia-SIP — FreeSWITCH fork
+RUN git clone --depth 1 https://github.com/freeswitch/sofia-sip.git /src/sofia-sip \
+ && cd /src/sofia-sip \
+ && ./bootstrap.sh \
+ && ./configure \
+ && make -j"$(nproc)" \
+ && make install \
+ && ldconfig
+
+# 3. libks — installs into /usr per upstream guidance so FS configure finds it
+RUN git clone --depth 1 https://github.com/signalwire/libks.git /src/libks \
+ && cd /src/libks \
+ && cmake -B build -DCMAKE_INSTALL_PREFIX=/usr \
+ && cmake --build build -j"$(nproc)" \
+ && cmake --install build \
+ && ldconfig
+
+# 4. signalwire-c
+RUN git clone --depth 1 https://github.com/signalwire/signalwire-c.git /src/signalwire-c \
+ && cd /src/signalwire-c \
+ && cmake . \
+ && make -j"$(nproc)" \
+ && make install \
+ && ldconfig
+
+# 5. FreeSWITCH itself — pinned to FS_VERSION (build-arg).
+#    `--disable-everything` strips bundled modules; we only need libfreeswitch
+#    plus headers + freeswitch.pc so out-of-tree modules can link.
 RUN git clone --depth 1 --branch ${FS_VERSION} \
         https://github.com/signalwire/freeswitch.git /src/fs
-
 WORKDIR /src/fs
-
-# --disable-everything skips every bundled module — we only need libfreeswitch
-# and the headers so out-of-tree modules can link against the ABI.
 RUN ./bootstrap.sh -j \
  && ./configure \
         --prefix=/opt/freeswitch \
         --disable-everything \
-        --disable-core-odbc-support \
-        --disable-system-xml-prefix \
  && make -j"$(nproc)" \
  && make install
 
+
 # ---------------------------------------------------------------------------
-# Stage 2: lean runtime — just enough to build out-of-tree modules
+# Stage 2: lean image — module build chain + FS install artifacts
 # ---------------------------------------------------------------------------
-FROM debian:${DEBIAN_VERSION}-slim
+FROM debian:${DEBIAN_RELEASE}-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    PKG_CONFIG_PATH=/opt/freeswitch/lib/pkgconfig \
-    LD_LIBRARY_PATH=/opt/freeswitch/lib
+    PKG_CONFIG_PATH=/opt/freeswitch/lib/pkgconfig:/usr/local/lib/pkgconfig \
+    LD_LIBRARY_PATH=/opt/freeswitch/lib:/usr/local/lib
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         build-essential cmake pkg-config git \
-        libssl-dev libcurl4-openssl-dev libsqlite3-dev libpcre3-dev \
-        libspeex-dev libspeexdsp-dev libopus-dev libsndfile1-dev \
-        libedit-dev libldns-dev libtiff-dev \
+        autoconf automake libtool libtool-bin \
+        uuid-dev libssl-dev libcurl4-openssl-dev libsqlite3-dev \
+        libpcre2-dev libspeex-dev libspeexdsp-dev libopus-dev \
+        libsndfile1-dev libedit-dev libldns-dev libtiff-dev \
+        liblua5.2-dev libpq-dev libavformat-dev libswscale-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Just headers, libs, and pkg-config from stage 1
+# FreeSWITCH install tree (headers, libs, freeswitch.pc, helper scripts)
 COPY --from=fs-source /opt/freeswitch /opt/freeswitch
 
-# Sanity check at build time: pkg-config can resolve `freeswitch`
-RUN pkg-config --exists freeswitch && \
-    pkg-config --modversion freeswitch
+# Source-built libs that aren't apt-installable: spandsp + sofia-sip + signalwire-c
+# installed under /usr/local; libks installed under /usr per its upstream guide.
+COPY --from=fs-source /usr/local/include /usr/local/include
+COPY --from=fs-source /usr/local/lib /usr/local/lib
+COPY --from=fs-source /usr/include/libks /usr/include/libks
+COPY --from=fs-source /usr/lib/libks*.so* /usr/lib/
+COPY --from=fs-source /usr/lib/pkgconfig/libks.pc /usr/lib/pkgconfig/libks.pc
+
+RUN ldconfig
+
+# Sanity at build time: pkg-config can resolve everything we promise.
+RUN pkg-config --exists freeswitch && pkg-config --modversion freeswitch \
+ && pkg-config --exists libks && pkg-config --modversion libks
 
 LABEL org.opencontainers.image.title="fs-mod-builder" \
-      org.opencontainers.image.description="Builder image for out-of-tree FreeSWITCH modules (multi-arch: linux/amd64, linux/arm64)" \
+      org.opencontainers.image.description="Builder image for out-of-tree FreeSWITCH modules (FS 1.11 on Debian Trixie, multi-arch)" \
       org.opencontainers.image.source="https://github.com/cyrenity/fs-builder"

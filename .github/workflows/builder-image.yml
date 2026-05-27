@@ -9,13 +9,13 @@ on:
   workflow_dispatch:
     inputs:
       fs_version:
-        description: FreeSWITCH source tag (e.g. v1.10.12)
+        description: FreeSWITCH source tag (e.g. v1.11.0)
         required: true
-        default: v1.10.12
-      debian_version:
-        description: Debian major version
+        default: v1.11.0
+      debian_release:
+        description: Debian release codename (e.g. trixie, bookworm)
         required: true
-        default: "12"
+        default: trixie
 
 permissions:
   contents: read
@@ -51,14 +51,14 @@ jobs:
       - name: Derive tags
         id: meta
         run: |
-          fs_version="${{ inputs.fs_version || 'v1.10.12' }}"
-          debian_version="${{ inputs.debian_version || '12' }}"
+          fs_version="${{ inputs.fs_version || 'v1.11.0' }}"
+          debian_release="${{ inputs.debian_release || 'trixie' }}"
           fs_short="${fs_version#v}"
           image="ghcr.io/${{ github.repository_owner }}/fs-mod-builder"
-          echo "image=$image"                                          >> $GITHUB_OUTPUT
-          echo "fs_version=$fs_version"                                >> $GITHUB_OUTPUT
-          echo "debian_version=$debian_version"                        >> $GITHUB_OUTPUT
-          echo "version_tag=${fs_short}-debian${debian_version}"       >> $GITHUB_OUTPUT
+          echo "image=$image"                                       >> $GITHUB_OUTPUT
+          echo "fs_version=$fs_version"                             >> $GITHUB_OUTPUT
+          echo "debian_release=$debian_release"                     >> $GITHUB_OUTPUT
+          echo "version_tag=${fs_short}-${debian_release}"          >> $GITHUB_OUTPUT
 
       - name: Build & push per-arch image
         uses: docker/build-push-action@v6
@@ -68,7 +68,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             FS_VERSION=${{ steps.meta.outputs.fs_version }}
-            DEBIAN_VERSION=${{ steps.meta.outputs.debian_version }}
+            DEBIAN_RELEASE=${{ steps.meta.outputs.debian_release }}
           push: true
           # Per-arch tag — combined into a manifest list in the merge job.
           tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version_tag }}-${{ matrix.suffix }}
@@ -88,12 +88,12 @@ jobs:
       - name: Derive tags
         id: meta
         run: |
-          fs_version="${{ inputs.fs_version || 'v1.10.12' }}"
-          debian_version="${{ inputs.debian_version || '12' }}"
+          fs_version="${{ inputs.fs_version || 'v1.11.0' }}"
+          debian_release="${{ inputs.debian_release || 'trixie' }}"
           fs_short="${fs_version#v}"
           image="ghcr.io/${{ github.repository_owner }}/fs-mod-builder"
-          echo "image=$image"                                    >> $GITHUB_OUTPUT
-          echo "version_tag=${fs_short}-debian${debian_version}" >> $GITHUB_OUTPUT
+          echo "image=$image"                                >> $GITHUB_OUTPUT
+          echo "version_tag=${fs_short}-${debian_release}"   >> $GITHUB_OUTPUT
 
       - name: Create & push multi-arch manifest
         run: |
