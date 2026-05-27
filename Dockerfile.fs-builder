@@ -44,12 +44,9 @@ ARG EXTRA_CFLAGS
 ARG EXTRA_CXXFLAGS
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Build-time deps. Notes:
-#   - libtool-bin supplies the actual `libtool` binary on Debian 12+; the
-#     libtool package alone only installs helper scripts.
-#   - libpcre3-dev (PCRE1) was removed from Trixie since upstream hit EOL.
-#     We install it only when available so the same Dockerfile works on
-#     Bookworm (FS 1.10.x prefers PCRE1) and Trixie (PCRE2-only).
+# Build-time deps — exactly as per the FS 1.11 Debian Trixie install guide.
+# libtool-bin supplies the actual `libtool` binary on Debian 12+; the
+# libtool package alone only installs helper scripts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates wget curl git \
         build-essential autoconf automake libtool libtool-bin \
@@ -59,10 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libtiff-dev libopus-dev liblua5.2-dev libpq-dev \
         libsndfile1-dev libpcre2-dev \
         libavformat-dev libswscale-dev \
- && if apt-cache show libpcre3-dev >/dev/null 2>&1; then \
-        apt-get install -y --no-install-recommends libpcre3-dev; \
-    fi \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # Each prerequisite is its own RUN layer so an FS_VERSION bump doesn't
 # invalidate the (expensive) prerequisite cache.
@@ -141,10 +135,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libspeex-dev libspeexdsp-dev libopus-dev \
         libsndfile1-dev libedit-dev libldns-dev libtiff-dev \
         liblua5.2-dev libpq-dev libavformat-dev libswscale-dev \
- && if apt-cache show libpcre3-dev >/dev/null 2>&1; then \
-        apt-get install -y --no-install-recommends libpcre3-dev; \
-    fi \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # FreeSWITCH install tree (headers, libs, freeswitch.pc, helper scripts)
 COPY --from=fs-source /opt/freeswitch /opt/freeswitch
