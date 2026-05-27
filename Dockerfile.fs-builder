@@ -42,11 +42,17 @@ ARG FS_VERSION
 ARG SPANDSP_REF
 ARG EXTRA_CFLAGS
 ARG EXTRA_CXXFLAGS
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 
-# Build-time deps — exactly as per the FS 1.11 Debian Trixie install guide.
-# libtool-bin supplies the actual `libtool` binary on Debian 12+; the
-# libtool package alone only installs helper scripts.
+# Build-time deps — base list matches the FS 1.11 Debian Trixie install guide.
+# Notes:
+#   - libtool-bin supplies the actual `libtool` binary on Debian 12+; the
+#     libtool package alone only installs helper scripts.
+#   - libpcre3-dev (PCRE1) is added only on Bookworm and older — FS 1.10.x
+#     configure looks up the `libpcre` pkg-config package by name, which only
+#     libpcre3-dev provides. Trixie has dropped libpcre3 entirely (PCRE1 hit
+#     upstream EOL) and FS 1.11+ uses libpcre2 instead.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates wget curl git \
         build-essential autoconf automake libtool libtool-bin \
@@ -56,7 +62,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libtiff-dev libopus-dev liblua5.2-dev libpq-dev \
         libsndfile1-dev libpcre2-dev \
         libavformat-dev libswscale-dev \
-    && rm -rf /var/lib/apt/lists/*
+ && . /etc/os-release \
+ && case "$VERSION_CODENAME" in \
+        bullseye|buster|bookworm) \
+            apt-get install -y --no-install-recommends libpcre3-dev ;; \
+    esac \
+ && rm -rf /var/lib/apt/lists/*
 
 # Each prerequisite is its own RUN layer so an FS_VERSION bump doesn't
 # invalidate the (expensive) prerequisite cache.
@@ -81,13 +92,13 @@ RUN git clone https://github.com/freeswitch/sofia-sip.git /src/sofia-sip \
  && make install \
  && ldconfig
 
-# 3. libks — installs into /usr per upstream guidance so FS configure finds it.
-#    Full clone (no --depth 1) so `git describe --tags` works during configure.
+# 3. libks — installs into /usr/local so it shares a prefix with spandsp,
+#    sofia-sip, and signalwire-c (stage 2 then COPYs /usr/local wholesale).
 #    WITH_PACKAGING=OFF disables the Debian .deb generation block, whose
 #    install step otherwise references a `changelog.Debian.gz` we don't build.
 RUN git clone https://github.com/signalwire/libks.git /src/libks \
  && cd /src/libks \
- && cmake -B build -DCMAKE_INSTALL_PREFIX=/usr -DWITH_PACKAGING=OFF \
+ && cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DWITH_PACKAGING=OFF \
  && cmake --build build -j"$(nproc)" \
  && cmake --install build \
  && ldconfig
@@ -100,12 +111,16 @@ RUN git clone https://github.com/signalwire/signalwire-c.git /src/signalwire-c \
  && make install \
  && ldconfig
 
-# 5. FreeSWITCH itself — pinned to FS_VERSION (build-arg).
-#    `--disable-everything` strips bundled modules; we only need libfreeswitch
-#    plus headers + freeswitch.pc so out-of-tree modules can link.
-#    EXTRA_CFLAGS/CXXFLAGS let older FS (1.10.x) compile on newer GCC.
-RUN git clone --depth 1 --branch ${FS_VERSION} \
-        https://github.com/signalwire/freeswitch.git /src/fs
+# 5. FreeSWITCH itself — downloaded as a release tarball (immutable archive of
+#    the tag) rather than git-cloned. `--disable-everything` strips bundled
+#    modules; we only need libfreeswitch plus headers + freeswitch.pc so
+#    out-of-tree modules can link. EXTRA_CFLAGS/CXXFLAGS let older FS (1.10.x)
+#    compile on newer GCC.
+RUN mkdir -p /src/fs \
+ && wget -qO /tmp/fs.tar.gz \
+        "https://github.com/signalwire/freeswitch/archive/refs/tags/${FS_VERSION}.tar.gz" \
+ && tar -xzf /tmp/fs.tar.gz -C /src/fs --strip-components=1 \
+ && rm /tmp/fs.tar.gz
 WORKDIR /src/fs
 # Only pass CFLAGS/CXXFLAGS when set — passing CFLAGS="" overrides autoconf's
 # default -O2 -g and produces unoptimized binaries.
@@ -143,19 +158,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # FreeSWITCH install tree (headers, libs, freeswitch.pc, helper scripts)
 COPY --from=fs-source /opt/freeswitch /opt/freeswitch
 
-# Source-built libs that aren't apt-installable: spandsp + sofia-sip + signalwire-c
-# installed under /usr/local; libks installed under /usr per its upstream guide.
+# Source-built libs (spandsp, sofia-sip, libks, signalwire-c) all install
+# under /usr/local — copy that subtree wholesale.
 COPY --from=fs-source /usr/local/include /usr/local/include
-COPY --from=fs-source /usr/local/lib /usr/local/lib
-COPY --from=fs-source /usr/include/libks /usr/include/libks
-COPY --from=fs-source /usr/lib/libks*.so* /usr/lib/
-COPY --from=fs-source /usr/lib/pkgconfig/libks.pc /usr/lib/pkgconfig/libks.pc
+COPY --from=fs-source /usr/local/lib     /usr/local/lib
 
 RUN ldconfig
 
 # Sanity at build time: pkg-config can resolve everything we promise.
 RUN pkg-config --exists freeswitch && pkg-config --modversion freeswitch \
- && pkg-config --exists libks && pkg-config --modversion libks
+ && pkg-config --exists libks2     && pkg-config --modversion libks2
 
 LABEL org.opencontainers.image.title="fs-mod-builder" \
       org.opencontainers.image.description="Builder image for out-of-tree FreeSWITCH modules (FS 1.11 on Debian Trixie, multi-arch)" \
