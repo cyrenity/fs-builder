@@ -25,6 +25,13 @@
 
 ARG DEBIAN_RELEASE=trixie
 ARG FS_VERSION=v1.11.0
+# Pinned spandsp commit for the matching FS version. Master is fine for
+# FS 1.11; FS 1.10.12 needs the 0d2e6ac... commit (ABI mismatch on master).
+ARG SPANDSP_REF=master
+# Extra CFLAGS/CXXFLAGS to pass to FS ./configure. GCC 12+ rejects FS 1.10.12
+# without -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types.
+ARG EXTRA_CFLAGS=
+ARG EXTRA_CXXFLAGS=
 
 # ---------------------------------------------------------------------------
 # Stage 1: build prerequisites + FreeSWITCH
@@ -32,10 +39,16 @@ ARG FS_VERSION=v1.11.0
 FROM debian:${DEBIAN_RELEASE}-slim AS fs-source
 
 ARG FS_VERSION
+ARG SPANDSP_REF
+ARG EXTRA_CFLAGS
+ARG EXTRA_CXXFLAGS
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Build-time deps. Note: libtool-bin supplies the actual `libtool` binary on
-# Debian 12+; the libtool package alone only installs helper scripts.
+# Build-time deps. Notes:
+#   - libtool-bin supplies the actual `libtool` binary on Debian 12+; the
+#     libtool package alone only installs helper scripts.
+#   - Both libpcre2-dev (FS 1.11+) and libpcre3-dev (older FS) are included
+#     so this Dockerfile works across FS versions.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates wget curl git \
         build-essential autoconf automake libtool libtool-bin \
@@ -43,15 +56,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         uuid-dev libssl-dev libsqlite3-dev libcurl4-openssl-dev \
         libldns-dev libspeexdsp-dev libspeex-dev libedit-dev \
         libtiff-dev libopus-dev liblua5.2-dev libpq-dev \
-        libsndfile1-dev libpcre2-dev libavformat-dev libswscale-dev \
+        libsndfile1-dev libpcre2-dev libpcre3-dev \
+        libavformat-dev libswscale-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Each prerequisite is its own RUN layer so an FS_VERSION bump doesn't
 # invalidate the (expensive) prerequisite cache.
 
-# 1. SpanDSP — FreeSWITCH fork
-RUN git clone --depth 1 https://github.com/freeswitch/spandsp.git /src/spandsp \
+# 1. SpanDSP — FreeSWITCH fork. Clone full history (no --depth 1) because
+#    SPANDSP_REF can be a specific commit hash, not just a branch.
+RUN git clone https://github.com/freeswitch/spandsp.git /src/spandsp \
  && cd /src/spandsp \
+ && git checkout "${SPANDSP_REF}" \
  && ./bootstrap.sh \
  && ./configure \
  && make -j"$(nproc)" \
@@ -86,13 +102,19 @@ RUN git clone --depth 1 https://github.com/signalwire/signalwire-c.git /src/sign
 # 5. FreeSWITCH itself — pinned to FS_VERSION (build-arg).
 #    `--disable-everything` strips bundled modules; we only need libfreeswitch
 #    plus headers + freeswitch.pc so out-of-tree modules can link.
+#    EXTRA_CFLAGS/CXXFLAGS let older FS (1.10.x) compile on newer GCC.
 RUN git clone --depth 1 --branch ${FS_VERSION} \
         https://github.com/signalwire/freeswitch.git /src/fs
 WORKDIR /src/fs
+# Only pass CFLAGS/CXXFLAGS when set — passing CFLAGS="" overrides autoconf's
+# default -O2 -g and produces unoptimized binaries.
 RUN ./bootstrap.sh -j \
- && ./configure \
-        --prefix=/opt/freeswitch \
-        --disable-everything \
+ && if [ -n "${EXTRA_CFLAGS}" ] || [ -n "${EXTRA_CXXFLAGS}" ]; then \
+        ./configure --prefix=/opt/freeswitch --disable-everything \
+            CFLAGS="${EXTRA_CFLAGS}" CXXFLAGS="${EXTRA_CXXFLAGS}"; \
+    else \
+        ./configure --prefix=/opt/freeswitch --disable-everything; \
+    fi \
  && make -j"$(nproc)" \
  && make install
 
@@ -111,7 +133,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake pkg-config git \
         autoconf automake libtool libtool-bin \
         uuid-dev libssl-dev libcurl4-openssl-dev libsqlite3-dev \
-        libpcre2-dev libspeex-dev libspeexdsp-dev libopus-dev \
+        libpcre2-dev libpcre3-dev \
+        libspeex-dev libspeexdsp-dev libopus-dev \
         libsndfile1-dev libedit-dev libldns-dev libtiff-dev \
         liblua5.2-dev libpq-dev libavformat-dev libswscale-dev \
     && rm -rf /var/lib/apt/lists/*

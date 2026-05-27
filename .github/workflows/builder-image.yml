@@ -8,14 +8,15 @@ on:
       - .github/workflows/builder-image.yml
   workflow_dispatch:
     inputs:
-      fs_version:
-        description: FreeSWITCH source tag (e.g. v1.11.0)
+      variants:
+        description: Which variants to build
         required: true
-        default: v1.11.0
-      debian_release:
-        description: Debian release codename (e.g. trixie, bookworm)
-        required: true
-        default: trixie
+        default: all
+        type: choice
+        options:
+          - all
+          - "1.11.0-trixie"
+          - "1.10.12-bookworm"
 
 permissions:
   contents: read
@@ -23,87 +24,119 @@ permissions:
 
 jobs:
   build:
-    # Multi-arch build emits two manifests; we build each on its native runner
-    # for speed (arm64 image takes ~12 min native vs ~80 min under QEMU) and
-    # stitch them together in the `merge` job below.
+    # Two dimensions: variant (FS version + Debian release) and arch.
+    # We build each (variant × arch) on its native runner — both arm64
+    # variants on `ubuntu-24.04-arm`, both amd64 variants on `ubuntu-latest`
+    # — and stitch per-arch tags into one multi-arch manifest per variant
+    # in the `merge` job below.
     strategy:
       fail-fast: false
       matrix:
-        include:
+        variant:
+          - tag: 1.11.0-trixie
+            fs_version: v1.11.0
+            debian_release: trixie
+            spandsp_ref: master
+            extra_cflags: ""
+            extra_cxxflags: ""
+          - tag: 1.10.12-bookworm
+            fs_version: v1.10.12
+            debian_release: bookworm
+            # Pinned commit per the FS 1.10.12 install guide — master
+            # spandsp drifted past FS 1.10.12's expectations.
+            spandsp_ref: 0d2e6ac65e0e8f53d652665a743015a88bf048d4
+            # FS 1.10.12 sources still emit a few warnings GCC 12+
+            # promotes to errors. Suppress at the FS configure stage only.
+            extra_cflags: "-Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types"
+            extra_cxxflags: "-Wno-error"
+        arch:
           - platform: linux/amd64
             runner: ubuntu-latest
             suffix: amd64
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
             suffix: arm64
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.arch.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Skip if variant wasn't requested
+        id: gate
+        run: |
+          requested="${{ inputs.variants || 'all' }}"
+          tag="${{ matrix.variant.tag }}"
+          if [ "$requested" = "all" ] || [ "$requested" = "$tag" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping $tag (workflow_dispatch requested $requested)"
+          fi
 
-      - uses: docker/setup-buildx-action@v3
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
 
-      - uses: docker/login-action@v3
+      - if: steps.gate.outputs.run == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - if: steps.gate.outputs.run == 'true'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive tags
-        id: meta
-        run: |
-          fs_version="${{ inputs.fs_version || 'v1.11.0' }}"
-          debian_release="${{ inputs.debian_release || 'trixie' }}"
-          fs_short="${fs_version#v}"
-          image="ghcr.io/${{ github.repository_owner }}/fs-mod-builder"
-          echo "image=$image"                                       >> $GITHUB_OUTPUT
-          echo "fs_version=$fs_version"                             >> $GITHUB_OUTPUT
-          echo "debian_release=$debian_release"                     >> $GITHUB_OUTPUT
-          echo "version_tag=${fs_short}-${debian_release}"          >> $GITHUB_OUTPUT
-
-      - name: Build & push per-arch image
+      - if: steps.gate.outputs.run == 'true'
+        name: Build & push per-arch image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.fs-builder
-          platforms: ${{ matrix.platform }}
+          platforms: ${{ matrix.arch.platform }}
           build-args: |
-            FS_VERSION=${{ steps.meta.outputs.fs_version }}
-            DEBIAN_RELEASE=${{ steps.meta.outputs.debian_release }}
+            FS_VERSION=${{ matrix.variant.fs_version }}
+            DEBIAN_RELEASE=${{ matrix.variant.debian_release }}
+            SPANDSP_REF=${{ matrix.variant.spandsp_ref }}
+            EXTRA_CFLAGS=${{ matrix.variant.extra_cflags }}
+            EXTRA_CXXFLAGS=${{ matrix.variant.extra_cxxflags }}
           push: true
           # Per-arch tag — combined into a manifest list in the merge job.
-          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version_tag }}-${{ matrix.suffix }}
-          cache-from: type=gha,scope=${{ matrix.suffix }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.suffix }}
+          tags: ghcr.io/${{ github.repository_owner }}/fs-mod-builder:${{ matrix.variant.tag }}-${{ matrix.arch.suffix }}
+          cache-from: type=gha,scope=${{ matrix.variant.tag }}-${{ matrix.arch.suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.tag }}-${{ matrix.arch.suffix }}
 
   merge:
     needs: build
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - tag: 1.11.0-trixie
+          - tag: 1.10.12-bookworm
     steps:
-      - uses: docker/login-action@v3
+      - name: Skip if variant wasn't requested
+        id: gate
+        run: |
+          requested="${{ inputs.variants || 'all' }}"
+          tag="${{ matrix.variant.tag }}"
+          if [ "$requested" = "all" ] || [ "$requested" = "$tag" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.run == 'true'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive tags
-        id: meta
+      - if: steps.gate.outputs.run == 'true'
+        name: Create & push multi-arch manifest
         run: |
-          fs_version="${{ inputs.fs_version || 'v1.11.0' }}"
-          debian_release="${{ inputs.debian_release || 'trixie' }}"
-          fs_short="${fs_version#v}"
           image="ghcr.io/${{ github.repository_owner }}/fs-mod-builder"
-          echo "image=$image"                                >> $GITHUB_OUTPUT
-          echo "version_tag=${fs_short}-${debian_release}"   >> $GITHUB_OUTPUT
-
-      - name: Create & push multi-arch manifest
-        run: |
+          tag="${{ matrix.variant.tag }}"
           docker buildx imagetools create \
-            -t ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version_tag }} \
-            -t ${{ steps.meta.outputs.image }}:latest \
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version_tag }}-amd64 \
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version_tag }}-arm64
-
-      - name: Print resulting manifest
-        run: |
-          docker buildx imagetools inspect \
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version_tag }}
+            -t "${image}:${tag}" \
+            "${image}:${tag}-amd64" \
+            "${image}:${tag}-arm64"
+          docker buildx imagetools inspect "${image}:${tag}"
