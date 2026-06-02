@@ -10,21 +10,21 @@
 # Build (multi-arch):
 #   docker buildx build \
 #     --platform linux/arm64,linux/amd64 \
-#     --build-arg FS_VERSION=v1.11.0 \
+#     --build-arg FS_VERSION=v1.11.1 \
 #     --build-arg DEBIAN_RELEASE=trixie \
-#     -t ghcr.io/cyrenity/fs-mod-builder:1.11.0-trixie \
+#     -t ghcr.io/cyrenity/fs-mod-builder:1.11.1-trixie \
 #     -f Dockerfile.fs-builder --push .
 #
 # Use from a module repo's CI:
 #   jobs.build.container.image:
-#     ghcr.io/cyrenity/fs-mod-builder:1.11.0-trixie
+#     ghcr.io/cyrenity/fs-mod-builder:1.11.1-trixie
 #
 # Dep list / source-built prereqs follow the FreeSWITCH 1.11 Debian Trixie
 # install guide at:
 #   https://www.iqaai.com/resources/freeswitch-v1-11-0-installation-guide
 
 ARG DEBIAN_RELEASE=trixie
-ARG FS_VERSION=v1.11.0
+ARG FS_VERSION=v1.11.1
 # Pinned spandsp commit for the matching FS version. Master is fine for
 # FS 1.11; FS 1.10.12 needs the 0d2e6ac... commit (ABI mismatch on master).
 ARG SPANDSP_REF=master
