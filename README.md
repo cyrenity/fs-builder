@@ -4,7 +4,7 @@ Multi-arch Debian builder image for out-of-tree FreeSWITCH modules.
 
 CI publishes two variants in parallel:
 
-- **`1.11.1-trixie`** — FreeSWITCH 1.11.1 on Debian Trixie (13)
+- **`1.11.2-trixie`** — FreeSWITCH 1.11.2 on Debian Trixie (13)
 - **`1.10.12-bookworm`** — FreeSWITCH 1.10.12 on Debian Bookworm (12)
 
 Both variants are multi-arch (`linux/amd64` + `linux/arm64`) and bundle:
@@ -15,7 +15,7 @@ Both variants are multi-arch (`linux/amd64` + `linux/arm64`) and bundle:
 - The four source-only prerequisites FS needs since the bundled tree was
   removed: **spandsp**, **sofia-sip**, **libks**, **signalwire-c**. The
   `1.10.12-bookworm` variant uses a pinned spandsp commit
-  (`0d2e6ac…`) that matches FS 1.10.12's ABI expectations; `1.11.1-trixie`
+  (`0d2e6ac…`) that matches FS 1.10.12's ABI expectations; `1.11.2-trixie`
   tracks spandsp `master`.
 - A full module-build toolchain: `cmake`, `gcc`, `pkg-config`, `autoconf`,
   `libtool` + `libtool-bin`, plus the usual `-dev` packages (`libcurl`,
@@ -27,7 +27,7 @@ Both variants are multi-arch (`linux/amd64` + `linux/arm64`) and bundle:
 
 | Tag                  | FS source  | Base                   | Platforms                    |
 | -------------------- | ---------- | ---------------------- | ---------------------------- |
-| `1.11.1-trixie`      | `v1.11.1`  | `debian:trixie-slim`   | `linux/amd64`, `linux/arm64` |
+| `1.11.2-trixie`      | `v1.11.2`  | `debian:trixie-slim`   | `linux/amd64`, `linux/arm64` |
 | `1.10.12-bookworm`   | `v1.10.12` | `debian:bookworm-slim` | `linux/amd64`, `linux/arm64` |
 
 Per-arch tags (`*-arm64`, `*-amd64`) also exist but consumers should prefer
@@ -45,10 +45,10 @@ Local equivalent (one variant at a time):
 # Trixie / FS 1.11
 docker buildx build \
   --platform linux/arm64,linux/amd64 \
-  --build-arg FS_VERSION=v1.11.1 \
+  --build-arg FS_VERSION=v1.11.2 \
   --build-arg DEBIAN_RELEASE=trixie \
   --build-arg SPANDSP_REF=master \
-  -t ghcr.io/cyrenity/fs-mod-builder:1.11.1-trixie \
+  -t ghcr.io/cyrenity/fs-mod-builder:1.11.2-trixie \
   -f Dockerfile.fs-builder --push .
 
 # Bookworm / FS 1.10.12
@@ -81,7 +81,7 @@ jobs:
           - { runner: ubuntu-24.04-arm, suffix: arm64 }
     runs-on: ${{ matrix.runner }}
     container:
-      image: ghcr.io/cyrenity/fs-mod-builder:1.11.1-trixie  # or 1.10.12-bookworm
+      image: ghcr.io/cyrenity/fs-mod-builder:1.11.2-trixie  # or 1.10.12-bookworm
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -99,7 +99,7 @@ jobs:
 
 ## Bumping FreeSWITCH
 
-For a new patch release (e.g. `v1.11.1`), edit the matrix entry's
+For a new patch release (e.g. `v1.11.3`), edit the matrix entry's
 `fs_version` in `.github/workflows/builder-image.yml` and push. The Dockerfile
 clones whatever tag is named.
 
