@@ -15,7 +15,7 @@ on:
         type: choice
         options:
           - all
-          - "1.11.2-trixie"
+          - "1.11.3-trixie"
           - "1.10.12-bookworm"
 
 permissions:
@@ -33,8 +33,8 @@ jobs:
       fail-fast: false
       matrix:
         variant:
-          - tag: 1.11.2-trixie
-            fs_version: v1.11.2
+          - tag: 1.11.3-trixie
+            fs_version: v1.11.3
             debian_release: trixie
             spandsp_ref: master
             extra_cflags: ""
@@ -109,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         variant:
-          - tag: 1.11.2-trixie
+          - tag: 1.11.3-trixie
           - tag: 1.10.12-bookworm
     steps:
       - name: Skip if variant wasn't requested
